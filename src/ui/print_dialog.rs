@@ -1,0 +1,194 @@
+//! The print dialog: upload progress, file summary, Canvas slot mapping and
+//! start options. Start is only possible while the printer is idle.
+
+use egui::{Align2, Id, Layout, RichText, Sense, Vec2};
+use serde_json::Value;
+
+use super::theme;
+use crate::app::App;
+use crate::print_job::Stage;
+use crate::printer::codes;
+
+enum Action {
+    Start,
+    Close,
+}
+
+pub fn draw(app: &mut App, ctx: &egui::Context) {
+    if app.print_job.is_none() {
+        return;
+    }
+    let idle = app.printer_idle();
+    let busy = app
+        .state
+        .machine_status()
+        .map(codes::machine_status_name)
+        .unwrap_or("not connected");
+    let mut action = None;
+
+    egui::Window::new("Print")
+        .id(Id::new("print_dialog"))
+        .collapsible(false)
+        .resizable(false)
+        .default_width(540.0)
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            let Some(job) = app.print_job.as_mut() else { return };
+            ui.set_min_width(520.0);
+
+            // Summary: thumbnail, name, source, slicer estimates.
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(104.0), Sense::hover());
+                ui.painter().rect_filled(rect, 6, theme::BG);
+                match &job.thumb {
+                    Some(tex) => theme::paint_fit(ui, rect.shrink(4.0), tex),
+                    None => theme::placeholder_text(ui, rect, "No preview"),
+                }
+                ui.vertical(|ui| {
+                    ui.add(egui::Label::new(RichText::new(&job.filename).size(16.0).strong()).truncate());
+                    let source = match (&job.local_path, job.media) {
+                        (Some(p), _) => format!("Sent from {}", p.display()),
+                        (None, "udisk") => "On the USB drive".into(),
+                        _ => "On the printer".into(),
+                    };
+                    ui.add(egui::Label::new(RichText::new(source).small().color(theme::MUTED)).truncate());
+                    ui.add_space(4.0);
+                    let n = |k: &str| job.detail.get(k).and_then(Value::as_f64).filter(|&v| v > 0.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 22.0;
+                        theme::stat(ui, "Print time", n("print_time").map_or("—".into(), |t| theme::fmt_duration(t as i64)));
+                        theme::stat(ui, "Filament", n("total_filament_used").map_or("—".into(), |g| format!("{g:.1} g")));
+                        theme::stat(ui, "Layers", n("layer").map_or("—".into(), |l| format!("{l:.0}")));
+                    });
+                });
+            });
+            ui.separator();
+
+            match &job.stage {
+                Stage::Uploading { progress, .. } => {
+                    let sent = progress.sent.load(std::sync::atomic::Ordering::Relaxed);
+                    let total = progress.total.load(std::sync::atomic::Ordering::Relaxed);
+                    ui.label("Uploading to the printer…");
+                    ui.add(
+                        egui::ProgressBar::new(progress.fraction())
+                            .text(format!("{} of {}", theme::fmt_bytes(sent), theme::fmt_bytes(total)))
+                            .fill(theme::ACCENT),
+                    );
+                    ui.add_space(6.0);
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel upload").clicked() {
+                            action = Some(Action::Close);
+                        }
+                    });
+                    return;
+                }
+                Stage::LoadingDetails { .. } => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Reading file details from the printer…");
+                    });
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() {
+                            action = Some(Action::Close);
+                        }
+                    });
+                    return;
+                }
+                Stage::Failed(err) => {
+                    ui.label(RichText::new(err).color(theme::ERR));
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            action = Some(Action::Close);
+                        }
+                    });
+                    return;
+                }
+                Stage::Ready | Stage::Starting { .. } => {}
+            }
+            let starting = matches!(job.stage, Stage::Starting { .. });
+
+            ui.label(theme::section_title("Filament"));
+            if job.trays.is_empty() {
+                ui.label(RichText::new("No Canvas connected. The print uses the external spool.").color(theme::MUTED));
+            } else if job.tools.is_empty() {
+                ui.label(
+                    RichText::new("The file has no color information, so the printer chooses the slot.")
+                        .color(theme::MUTED),
+                );
+            } else {
+                egui::Grid::new("slot_map").num_columns(3).spacing([10.0, 6.0]).show(ui, |ui| {
+                    for i in 0..job.tools.len() {
+                        let tool = job.tools[i].clone();
+                        ui.horizontal(|ui| {
+                            theme::swatch(ui, theme::parse_hex_color(&tool.color), 18.0);
+                            ui.label(format!("T{}  {}", tool.t + 1, tool.kind));
+                        });
+                        ui.label(RichText::new("»").color(theme::MUTED));
+                        ui.horizontal(|ui| {
+                            let selected = job.mapping[i].map(|m| &job.trays[m]);
+                            theme::swatch(ui, selected.and_then(|t| theme::parse_hex_color(&t.color)), 18.0);
+                            let text = selected.map_or("Choose a slot".into(), |t| t.label());
+                            egui::ComboBox::from_id_salt(("slot", i))
+                                .width(250.0)
+                                .selected_text(text)
+                                .show_ui(ui, |ui| {
+                                    for (k, tray) in job.trays.iter().enumerate() {
+                                        ui.horizontal(|ui| {
+                                            theme::swatch(ui, theme::parse_hex_color(&tray.color), 14.0);
+                                            ui.selectable_value(&mut job.mapping[i], Some(k), tray.label());
+                                        });
+                                    }
+                                });
+                        });
+                        ui.end_row();
+                        if let Some(warning) = job.mismatch(i) {
+                            ui.label("");
+                            ui.label("");
+                            ui.label(RichText::new(format!("⚠ {warning}")).small().color(theme::WARN));
+                            ui.end_row();
+                        }
+                    }
+                });
+            }
+
+            ui.add_space(6.0);
+            ui.label(theme::section_title("Options"));
+            ui.checkbox(&mut job.level_bed, "Auto bed leveling before printing");
+            ui.checkbox(&mut job.timelapse, "Record a timelapse");
+
+            if let Some(err) = &job.error {
+                ui.add_space(4.0);
+                ui.label(RichText::new(err).color(theme::ERR));
+            }
+            if !idle {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "The printer is busy ({busy}). Start becomes available once it is idle."
+                    ))
+                    .color(theme::WARN),
+                );
+            }
+
+            ui.add_space(8.0);
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                let can_start = idle && !starting && job.mapping_complete();
+                if ui.add_enabled(can_start, theme::accent_button("▶ Start print")).clicked() {
+                    action = Some(Action::Start);
+                }
+                if ui.add_enabled(!starting, egui::Button::new("Cancel")).clicked() {
+                    action = Some(Action::Close);
+                }
+                if starting {
+                    ui.spinner();
+                    ui.label("Starting…");
+                }
+            });
+        });
+
+    match action {
+        Some(Action::Start) => app.start_print(),
+        Some(Action::Close) => app.cancel_print_job(),
+        None => {}
+    }
+}
