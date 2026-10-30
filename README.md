@@ -7,6 +7,16 @@ device tab in Elegoo Slicer: a live camera, the current job, temperatures, fans,
 speed and light, Canvas spools, motion controls, print history, files and a
 protocol log. It is a single executable with no server, browser or runtime.
 
+## Download
+
+Grab the Windows build from the
+[latest release](https://github.com/AlvaroEPena/cc2-monitor/releases/latest):
+unzip it and run `CC2 Monitor.exe`. Nothing needs installing. Settings are
+stored in `%APPDATA%\cc2-monitor`.
+
+Windows may warn that the app is from an unknown publisher, because the
+executable is not code-signed. Choose **More info → Run anyway**.
+
 ## Build
 
 ```bash
@@ -111,3 +121,7 @@ Not implemented. `src/ai.rs` defines a `FrameAnalyzer` trait, and the camera
 thread already calls it on every frame when it is enabled. To add detection,
 implement the trait and pass it to `CameraStream::start` in place of
 `ai::Disabled`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -1,9 +1,10 @@
 [package]
 name = "cc2-monitor"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Native desktop monitor for the Elegoo Centauri Carbon 2"
 license = "MIT"
+repository = "https://github.com/AlvaroEPena/cc2-monitor"
 
 [dependencies]
 eframe = { version = "0.31", features = ["persistence"] }
