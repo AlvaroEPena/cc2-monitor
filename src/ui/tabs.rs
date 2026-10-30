@@ -94,6 +94,11 @@ fn history(app: &mut App, ui: &mut egui::Ui) {
         ui.label(RichText::new(format!("{} prints", app.state.history.len())).color(theme::MUTED));
     });
 
+    // The printer ignores download requests while printing (seen on fw 02.01.01.07).
+    let can_download = !app.settings.ip.trim().is_empty() && !app.state.is_printing();
+    let can_render = app.printer_idle() && app.render.is_none();
+    let mut action = None;
+
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         egui::Grid::new("history")
             .num_columns(5)
@@ -108,7 +113,7 @@ fn history(app: &mut App, ui: &mut egui::Ui) {
                 for e in &app.state.history {
                     let s = |k: &str| e.get(k).and_then(Value::as_str).unwrap_or_default();
                     let n = |k: &str| e.get(k).and_then(Value::as_i64);
-                    ui.add(egui::Label::new(s("task_name")).truncate());
+                    name_cell(ui, s("task_name"), 300.0);
                     ui.label(n("begin_time").map_or("—".into(), theme::fmt_unix));
                     let dur = match (n("begin_time"), n("end_time")) {
                         (Some(b), Some(e)) if e >= b => theme::fmt_duration(e - b),
@@ -124,16 +129,111 @@ fn history(app: &mut App, ui: &mut egui::Ui) {
                         _ => ("Unknown", theme::MUTED),
                     };
                     ui.label(RichText::new(result).color(color));
-                    let tl = match n("time_lapse_video_status") {
-                        Some(2) => "Video ready",
-                        Some(1) => "Frames only",
-                        _ => "—",
-                    };
-                    ui.label(RichText::new(tl).color(theme::MUTED));
+                    ui.horizontal(|ui| {
+                        if let Some(a) = timelapse_cell(app, ui, e, can_download, can_render) {
+                            action = Some(a);
+                        }
+                    });
                     ui.end_row();
                 }
             });
     });
+
+    match action {
+        Some(TimelapseAction::Download(id, url)) => app.download_timelapse(id, url),
+        Some(TimelapseAction::Cancel(id)) => app.cancel_download(&id),
+        Some(TimelapseAction::Render(id, url)) => app.render_timelapse(id, url),
+        Some(TimelapseAction::Reveal(path)) => crate::app::reveal_in_folder(&path),
+        None => {}
+    }
+}
+
+enum TimelapseAction {
+    Download(String, String),
+    Cancel(String),
+    Render(String, String),
+    Reveal(std::path::PathBuf),
+}
+
+/// Timelapse column: download a rendered MP4, or render one from raw frames.
+fn timelapse_cell(
+    app: &App,
+    ui: &mut egui::Ui,
+    entry: &Value,
+    can_download: bool,
+    can_render: bool,
+) -> Option<TimelapseAction> {
+    let id = entry.get("task_id").and_then(Value::as_str).unwrap_or_default().to_string();
+    let url = entry
+        .get("time_lapse_video_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let status = entry.get("time_lapse_video_status").and_then(Value::as_i64);
+
+    match status {
+        Some(2) if url.starts_with("video/") => {
+            if let Some(t) = app.downloads.get(&id) {
+                let f = t.progress.fraction();
+                ui.add(
+                    egui::ProgressBar::new(f)
+                        .desired_width(120.0)
+                        .text(format!("{:.0}%", f * 100.0))
+                        .fill(theme::ACCENT),
+                );
+                if ui.small_button("✕").on_hover_text("Cancel download").clicked() {
+                    return Some(TimelapseAction::Cancel(id));
+                }
+                return None;
+            }
+            if let Some(path) = app.saved.get(&id) {
+                ui.label(RichText::new("✔ Saved").color(theme::OK));
+                if ui.small_button("Show in folder").clicked() {
+                    return Some(TimelapseAction::Reveal(path.clone()));
+                }
+                return None;
+            }
+            let clicked = ui
+                .add_enabled(can_download, egui::Button::new("⬇ Download").small())
+                .on_hover_text("Save the timelapse video to this computer")
+                .on_disabled_hover_text(
+                    "The printer doesn't serve downloads while it's printing.                      Available again once it's idle.",
+                )
+                .clicked();
+            let size = entry.get("time_lapse_video_size").and_then(Value::as_u64).unwrap_or(0);
+            let secs = entry.get("time_lapse_video_duration").and_then(Value::as_i64).unwrap_or(0);
+            let mut info = Vec::new();
+            if size > 0 {
+                info.push(theme::fmt_bytes(size));
+            }
+            if secs > 0 {
+                info.push(theme::fmt_duration(secs));
+            }
+            ui.label(RichText::new(info.join(" · ")).small().color(theme::MUTED));
+            clicked.then_some(TimelapseAction::Download(id, url))
+        }
+        Some(1) if url.starts_with("picture/") => {
+            if app.render.as_ref().is_some_and(|r| r.task_id == id) {
+                ui.spinner();
+                ui.label(RichText::new("Rendering…").color(theme::MUTED));
+                return None;
+            }
+            let clicked = ui
+                .add_enabled(can_render, egui::Button::new("Render video").small())
+                .on_hover_text(
+                    "The printer recorded frames but never made the video. Rendering takes \
+                     about half a minute, needs the printer idle, and can only be done once \
+                     per print because the printer deletes the frames afterwards.",
+                )
+                .clicked();
+            ui.label(RichText::new("Frames only").small().color(theme::MUTED));
+            clicked.then_some(TimelapseAction::Render(id, url))
+        }
+        _ => {
+            ui.label(RichText::new("—").color(theme::MUTED));
+            None
+        }
+    }
 }
 
 fn files(app: &mut App, ui: &mut egui::Ui) {
@@ -182,7 +282,7 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                     {
                         print = Some(name.to_string());
                     }
-                    ui.add(egui::Label::new(name).truncate());
+                    name_cell(ui, name, 320.0);
                     ui.label(n("size").map_or("—".into(), |b| theme::fmt_bytes(b as u64)));
                     ui.label(
                         n("print_time")
@@ -265,4 +365,14 @@ fn log(app: &mut App, ui: &mut egui::Ui) {
                 });
             }
         });
+}
+
+/// Fixed-width, truncating file-name cell. A plain truncating label inside a
+/// Grid collapses to its minimum width, cutting names to a few letters.
+fn name_cell(ui: &mut egui::Ui, text: &str, width: f32) {
+    let size = egui::vec2(width, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(width);
+        ui.add(egui::Label::new(text).truncate()).on_hover_text(text);
+    });
 }

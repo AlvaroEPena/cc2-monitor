@@ -3,6 +3,7 @@
 pub mod client;
 pub mod codes;
 pub mod discovery;
+pub mod download;
 pub mod state;
 pub mod upload;
 

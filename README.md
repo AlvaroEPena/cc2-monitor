@@ -82,6 +82,21 @@ printer is printing, so the dialog can't interrupt a running job.
 The slot map always covers every color in the file. The printer silently falls
 back to slot 1 for any color left out, so a partial map is never sent.
 
+## Timelapses
+
+The **History** tab lists every print with its timelapse:
+
+- **⬇ Download** saves a finished timelapse MP4 over the network, so no USB
+  drive is needed.
+- **Render video** appears for prints where the printer kept the frames but
+  never made the video. The printer builds the MP4 (about half a minute, idle
+  printer only), then the row switches to Download. Each print can be rendered
+  once, because the printer deletes the frames afterwards.
+
+Timelapse recording can only be turned on when a print starts; the printer has
+no command to start one mid-print. Downloads may not work while the printer is
+printing, so if one fails, try again when it's idle.
+
 ## How it talks to the printer
 
 | What | How |
@@ -91,6 +106,7 @@ back to slot 1 for any color left out, so a partial map is never sent.
 | Camera | MJPEG over HTTP on port 8080 |
 | Upload | `PUT :80/upload` in 1 MB chunks with `Content-Range`, `X-File-Name`, `X-File-MD5`, `X-Token` |
 | Start print | MQTT method 1020 with a Canvas `slot_map` |
+| Timelapses | history from method 1036, render with method 1051, `GET :80/download?file_name=video/…` |
 
 The protocol is documented by
 [elegoo-homeassistant](https://github.com/danielcherubini/elegoo-homeassistant/blob/main/docs/CC2_PROTOCOL.md)
@@ -111,6 +127,7 @@ src/
     state.rs         status delta merging and typed accessors
     discovery.rs     UDP discovery
     upload.rs        chunked G-code upload
+    download.rs      timelapse download
     codes.rs         status, exception and error code names
   ui/                panels (header, camera + job, controls, tabs, dialogs, theme)
 assets/              logo (SVG), small-size logo, .ico and PNG icons

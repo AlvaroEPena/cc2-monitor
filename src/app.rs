@@ -2,7 +2,7 @@
 //! Panel drawing lives in `crate::ui`.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,6 +16,7 @@ use crate::camera::CameraStream;
 use crate::config::{Settings, STORAGE_KEY};
 use crate::print_job::{PrintJob, Stage};
 use crate::printer::discovery::Discovered;
+use crate::printer::download;
 use crate::printer::upload::{self, Progress};
 use crate::printer::{codes, ConnectConfig, Event, LogEntry, Phase, PrinterClient, PrinterState};
 use crate::ui;
@@ -24,6 +25,25 @@ const LOG_CAPACITY: usize = 1000;
 const TOAST_TTL: Duration = Duration::from_secs(6);
 const DETAIL_TIMEOUT: Duration = Duration::from_secs(6);
 const START_TIMEOUT: Duration = Duration::from_secs(15);
+const RENDER_TIMEOUT: Duration = Duration::from_secs(300);
+const RENDER_POLL: Duration = Duration::from_secs(5);
+/// Sub-status the printer reports when a render finds no raw frames.
+const SUB_TIMELAPSE_NO_FRAMES: i64 = 3022;
+
+/// A timelapse MP4 being downloaded, keyed by history task id.
+pub struct Transfer {
+    pub progress: Arc<Progress>,
+    done: Receiver<Result<(), String>>,
+    dest: PathBuf,
+}
+
+/// A timelapse being rendered from raw frames on the printer (method 1051).
+pub struct RenderJob {
+    pub task_id: String,
+    since: Instant,
+    last_poll: Instant,
+    start_sub_status: i64,
+}
 
 /// Where a requested thumbnail (method 1045) should go.
 #[derive(Clone, Copy)]
@@ -104,6 +124,11 @@ pub struct App {
     pub toasts: Vec<Toast>,
     pub ui: UiState,
     pub print_job: Option<PrintJob>,
+    pub downloads: HashMap<String, Transfer>,
+    /// Where each finished timelapse download was saved, by task id.
+    pub saved: HashMap<String, PathBuf>,
+    pub render: Option<RenderJob>,
+    save_pick: Option<(String, String, Receiver<Option<PathBuf>>)>,
     file_pick: Option<Receiver<Option<PathBuf>>>,
     thumb_requests: HashMap<u64, ThumbFor>,
     last_sample: Instant,
@@ -161,6 +186,10 @@ impl App {
             log: VecDeque::new(),
             toasts: Vec::new(),
             print_job: None,
+            downloads: HashMap::new(),
+            saved: HashMap::new(),
+            render: None,
+            save_pick: None,
             file_pick: None,
             thumb_requests: HashMap::new(),
             last_sample: Instant::now(),
@@ -315,6 +344,16 @@ impl App {
                         std::cmp::Reverse(e.get("begin_time").and_then(Value::as_i64).unwrap_or(0))
                     });
                     self.state.history = list;
+                }
+                self.check_render_finished();
+            }
+            1051 => {
+                if error_code != 0 {
+                    self.render = None;
+                    self.toast(
+                        ToastKind::Error,
+                        format!("Timelapse render refused: {}", codes::error_code_name(error_code)),
+                    );
                 }
             }
             1044 => {
@@ -615,6 +654,152 @@ impl App {
         }
     }
 
+    // ---- timelapses ----------------------------------------------------
+
+    fn access_token(&self) -> String {
+        match self.settings.access_code.trim() {
+            "" => crate::config::DEFAULT_ACCESS_CODE.to_string(),
+            code => code.to_string(),
+        }
+    }
+
+    /// Ask where to save a rendered timelapse, then download it.
+    pub fn download_timelapse(&mut self, task_id: String, remote: String) {
+        if self.downloads.contains_key(&task_id) || self.save_pick.is_some() {
+            return;
+        }
+        if self.state.is_printing() {
+            self.toast(ToastKind::Warning, "Timelapses can be downloaded once the printer is idle");
+            return;
+        }
+        let mut name = remote.rsplit('/').next().unwrap_or("timelapse").to_string();
+        if !name.to_lowercase().ends_with(".mp4") {
+            name.push_str(".mp4");
+        }
+        let dir = dirs::video_dir().or_else(dirs::home_dir).unwrap_or_default();
+        let (tx, rx) = mpsc::channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let picked = rfd::FileDialog::new()
+                .set_title("Save timelapse")
+                .set_directory(dir)
+                .set_file_name(name)
+                .add_filter("MP4 video", &["mp4"])
+                .save_file();
+            let _ = tx.send(picked);
+            ctx.request_repaint();
+        });
+        self.save_pick = Some((task_id, remote, rx));
+    }
+
+    fn start_download(&mut self, task_id: String, remote: String, dest: PathBuf) {
+        let progress = Arc::new(Progress::default());
+        let (tx, done) = mpsc::channel();
+        let host = format!("{}:{}", self.settings.ip.trim(), upload::UPLOAD_PORT);
+        let token = self.access_token();
+        {
+            let (progress, dest, ctx) = (progress.clone(), dest.clone(), self.ctx.clone());
+            std::thread::spawn(move || {
+                let result = download::download_file(
+                    &host,
+                    &token,
+                    &remote,
+                    &dest,
+                    &progress,
+                    download::READ_TIMEOUT,
+                );
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            });
+        }
+        self.saved.remove(&task_id);
+        self.downloads.insert(task_id, Transfer { progress, done, dest });
+    }
+
+    pub fn cancel_download(&mut self, task_id: &str) {
+        if let Some(t) = self.downloads.remove(task_id) {
+            t.progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Have the printer build the MP4 from a print's raw frames. The printer
+    /// deletes the frames afterwards, so each print can be rendered once.
+    pub fn render_timelapse(&mut self, task_id: String, url: String) {
+        if !self.printer_idle() || self.render.is_some() {
+            return;
+        }
+        if self.send(1051, json!({"url": url})).is_some() {
+            let now = Instant::now();
+            self.render = Some(RenderJob {
+                task_id,
+                since: now,
+                last_poll: now,
+                start_sub_status: self.state.sub_status(),
+            });
+        }
+    }
+
+    /// The render is done once history lists the task's video as ready.
+    fn check_render_finished(&mut self) {
+        let Some(job) = &self.render else { return };
+        let ready = self.state.history.iter().any(|e| {
+            e.get("task_id").and_then(Value::as_str) == Some(job.task_id.as_str())
+                && e.get("time_lapse_video_status").and_then(Value::as_i64) == Some(2)
+        });
+        if ready {
+            self.render = None;
+            self.toast(ToastKind::Success, "Timelapse rendered and ready to download");
+        }
+    }
+
+    fn poll_timelapses(&mut self) {
+        if let Some((_, _, rx)) = &self.save_pick {
+            if let Ok(picked) = rx.try_recv() {
+                let (task_id, remote, _) = self.save_pick.take().expect("checked above");
+                if let Some(dest) = picked {
+                    self.start_download(task_id, remote, dest);
+                }
+            }
+        }
+
+        let mut done = Vec::new();
+        for (id, t) in &self.downloads {
+            match t.done.try_recv() {
+                Ok(result) => done.push((id.clone(), Some(result))),
+                Err(mpsc::TryRecvError::Disconnected) => done.push((id.clone(), None)),
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        for (id, result) in done {
+            let Some(t) = self.downloads.remove(&id) else { continue };
+            match result {
+                Some(Ok(())) => {
+                    self.toast(ToastKind::Success, format!("Saved {}", t.dest.display()));
+                    self.saved.insert(id, t.dest);
+                }
+                Some(Err(e)) if e == "Download cancelled" => {}
+                Some(Err(e)) => self.toast(ToastKind::Error, e),
+                None => self.toast(ToastKind::Error, "Download stopped unexpectedly"),
+            }
+        }
+
+        let Some(job) = &self.render else { return };
+        let sub = self.state.sub_status();
+        if sub == SUB_TIMELAPSE_NO_FRAMES && job.start_sub_status != SUB_TIMELAPSE_NO_FRAMES {
+            self.render = None;
+            self.toast(ToastKind::Warning, "The printer has no frames left to render for that print");
+        } else if job.since.elapsed() > RENDER_TIMEOUT {
+            self.render = None;
+            self.toast(ToastKind::Error, "Timelapse render did not finish in 5 minutes");
+        } else if job.last_poll.elapsed() > RENDER_POLL && self.state.machine_status() != Some(12) {
+            // Not busy composing: see whether history now lists the video.
+            if let Some(job) = &mut self.render {
+                job.last_poll = Instant::now();
+            }
+            self.send(1036, json!({}));
+        }
+    }
+
     pub fn save_snapshot(&mut self) {
         let Some(jpeg) = self.last_jpeg.clone() else {
             self.toast(ToastKind::Warning, "No camera frame to save yet");
@@ -630,6 +815,21 @@ impl App {
             Ok(()) => self.toast(ToastKind::Success, format!("Saved {}", path.display())),
             Err(e) => self.toast(ToastKind::Error, format!("Snapshot failed: {e}")),
         }
+    }
+}
+
+/// Show a saved file in the system file manager.
+pub fn reveal_in_folder(path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        let _ = std::process::Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    if let Some(dir) = path.parent() {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }
 
@@ -649,6 +849,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
         self.poll_print_job();
+        self.poll_timelapses();
         self.pump_camera(ctx);
 
         if self.last_sample.elapsed() >= Duration::from_secs(1) {
