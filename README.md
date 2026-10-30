@@ -7,6 +7,8 @@ device tab in Elegoo Slicer: a live camera, the current job, temperatures, fans,
 speed and light, Canvas spools, motion controls, print history, files and a
 protocol log. It is a single executable with no server, browser or runtime.
 
+![CC2 Monitor showing a print in progress: live camera, current job, temperatures, fans, Canvas spools and motion controls](docs/screenshot.png)
+
 ## Download
 
 Grab the Windows build from the
