@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>CC2 Monitor (small sizes)</title>
+  <!-- Simplified for 16-32 px: no glow or highlight, bolder single-spike trace. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#272C36"/>
+      <stop offset="1" stop-color="#111318"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+  <rect x="140" y="56" width="232" height="118" rx="30" fill="#F97316"/>
+  <path d="M178 168 H334 L290 238 H222 Z" fill="#E05A0A"/>
+  <path d="M56 392 H176 L256 268 L336 460 L380 392 H456"
+        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

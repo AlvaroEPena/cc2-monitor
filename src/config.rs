@@ -18,6 +18,8 @@ pub struct Settings {
     pub camera_fps: u32,
     /// Camera resolution divisor: 1 full, 2 half, 4 quarter.
     pub camera_scale: u8,
+    /// Last plate side used to start a print: false textured (A), true smooth (B).
+    pub smooth_plate: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             camera_on: true,
             camera_fps: 10,
             camera_scale: 1,
+            smooth_plate: false,
         }
     }
 }

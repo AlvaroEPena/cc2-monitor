@@ -235,43 +235,28 @@ pub fn contrast_text(bg: Color32) -> Color32 {
     }
 }
 
-/// Window icon: a nozzle over a bed, drawn procedurally so no asset files ship.
-pub fn app_icon() -> egui::IconData {
-    const N: usize = 64;
-    let mut rgba = vec![0u8; N * N * 4];
-    let put = |rgba: &mut [u8], x: usize, y: usize, c: Color32| {
-        let i = (y * N + x) * 4;
-        rgba[i..i + 4].copy_from_slice(&[c.r(), c.g(), c.b(), 255]);
-    };
-    for y in 0..N {
-        for x in 0..N {
-            // Rounded-square background.
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            let r = 12.0;
-            let cx = fx.clamp(r, N as f32 - r);
-            let cy = fy.clamp(r, N as f32 - r);
-            if (fx - cx).powi(2) + (fy - cy).powi(2) > r * r {
-                continue;
-            }
-            put(&mut rgba, x, y, CARD);
+/// The logo's small-size artwork (assets/logo-small.svg rendered at 64 px):
+/// bold enough to read in the 16 px title bar and the taskbar.
+const ICON_PNG: &[u8] = include_bytes!("../../assets/icon-64.png");
 
-            let dx = (fx - 32.0).abs();
-            // Nozzle body narrowing to a tip.
-            if (12.0..36.0).contains(&fy) && dx < 16.0 - (fy - 12.0) * 0.5 {
-                put(&mut rgba, x, y, ACCENT);
-            }
-            if (36.0..42.0).contains(&fy) && dx < 3.0 {
-                put(&mut rgba, x, y, ACCENT);
-            }
-            // Bed.
-            if (48.0..52.0).contains(&fy) && dx < 22.0 {
-                put(&mut rgba, x, y, BED);
-            }
-        }
-    }
+/// Window and taskbar icon.
+pub fn app_icon() -> egui::IconData {
+    let img = image::load_from_memory(ICON_PNG)
+        .expect("bundled icon is a valid PNG")
+        .to_rgba8();
     egui::IconData {
-        rgba,
-        width: N as u32,
-        height: N as u32,
+        width: img.width(),
+        height: img.height(),
+        rgba: img.into_raw(),
     }
+}
+
+/// The logo as a texture, for the header.
+pub fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let icon = app_icon();
+    let image = egui::ColorImage::from_rgba_unmultiplied(
+        [icon.width as usize, icon.height as usize],
+        &icon.rgba,
+    );
+    ctx.load_texture("logo", image, egui::TextureOptions::LINEAR)
 }

@@ -153,8 +153,30 @@ pub fn draw(app: &mut App, ctx: &egui::Context) {
 
             ui.add_space(6.0);
             ui.label(theme::section_title("Options"));
+            ui.horizontal(|ui| {
+                ui.label("Plate side");
+                ui.selectable_value(&mut job.smooth_plate, false, "Textured (A)")
+                    .on_hover_text("High-temperature textured PEI side");
+                ui.selectable_value(&mut job.smooth_plate, true, "Smooth (B)")
+                    .on_hover_text("Low-temperature smooth side");
+            });
             ui.checkbox(&mut job.level_bed, "Auto bed leveling before printing");
             ui.checkbox(&mut job.timelapse, "Record a timelapse");
+            if !job.trays.is_empty() {
+                let changed = job.auto_refill != job.printer_auto_refill;
+                ui.checkbox(&mut job.auto_refill, "Canvas auto refill")
+                    .on_hover_text(
+                        "When a spool runs out, continue from another slot with the same \
+                         filament. This is a printer setting, so it stays as set after the print.",
+                    );
+                if changed {
+                    ui.label(
+                        RichText::new("Auto refill will be changed on the printer before starting.")
+                            .small()
+                            .color(theme::MUTED),
+                    );
+                }
+            }
 
             if let Some(err) = &job.error {
                 ui.add_space(4.0);

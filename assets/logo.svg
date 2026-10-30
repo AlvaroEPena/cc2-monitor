@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>CC2 Monitor</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#272C36"/>
+      <stop offset="1" stop-color="#111318"/>
+    </linearGradient>
+    <linearGradient id="block" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFA057"/>
+      <stop offset="1" stop-color="#F26A12"/>
+    </linearGradient>
+    <linearGradient id="cone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E9600C"/>
+      <stop offset="1" stop-color="#C24A06"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FF8A2B" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FF8A2B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="trace" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="0.45" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Tile -->
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect x="3" y="3" width="506" height="506" rx="113" fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="6"/>
+
+  <!-- Heat glow where the nozzle meets the line -->
+  <circle cx="256" cy="262" r="58" fill="url(#glow)"/>
+
+  <!-- Hotend: heat block, cone, tip -->
+  <rect x="172" y="78" width="168" height="98" rx="24" fill="url(#block)"/>
+  <rect x="196" y="98" width="72" height="12" rx="6" fill="#FFFFFF" fill-opacity="0.28"/>
+  <path d="M204 170 H308 L278 228 H234 Z" fill="url(#cone)"/>
+  <rect x="240" y="222" width="32" height="20" rx="7" fill="#B44305"/>
+
+  <!-- The printed line, drawn as a pulse trace -->
+  <path d="M78 386 H164 L194 350 L224 420 L256 276 L290 444 L320 362 L346 386 H434"
+        fill="none" stroke="url(#trace)" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

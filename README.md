@@ -1,3 +1,5 @@
+<img src="assets/logo.svg" width="96" alt="CC2 Monitor logo">
+
 # CC2 Monitor
 
 A native desktop monitor for the Elegoo Centauri Carbon 2, laid out like the
@@ -58,7 +60,9 @@ A local file is uploaded first, with a progress bar. The dialog then reads the
 file's details from the printer and matches each color in the file to a
 Canvas slot: same material first, then the nearest color. You can change any
 slot. A warning appears when the material or color doesn't match. Options are
-auto bed leveling (on by default) and timelapse.
+the plate side (textured A or smooth B; the last one you used is remembered),
+auto bed leveling (on by default), timelapse, and Canvas auto refill. Auto
+refill is a printer setting, so a change stays in effect after the print.
 
 **Start print** only works while the printer is idle. It is disabled while the
 printer is printing, so the dialog can't interrupt a running job.
@@ -97,6 +101,8 @@ src/
     upload.rs        chunked G-code upload
     codes.rs         status, exception and error code names
   ui/                panels (header, camera + job, controls, tabs, dialogs, theme)
+assets/              logo (SVG), small-size logo, .ico and PNG icons
+build.rs             embeds the icon and version info into the Windows .exe
 ```
 
 ## AI detection

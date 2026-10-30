@@ -90,6 +90,7 @@ pub struct UiState {
 
 pub struct App {
     ctx: egui::Context,
+    pub logo: TextureHandle,
     pub settings: Settings,
     pub client: Option<PrinterClient>,
     pub phase: Option<Phase>,
@@ -128,6 +129,7 @@ impl App {
 
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
+            logo: ui::theme::logo_texture(&cc.egui_ctx),
             ui: UiState {
                 tab: Tab::Temperatures,
                 show_connect: settings.ip.trim().is_empty(),
@@ -511,6 +513,7 @@ impl App {
         }
         let mut job = PrintJob::new(name, "local", Stage::Uploading { progress, done });
         job.local_path = Some(path);
+        job.smooth_plate = self.settings.smooth_plate;
         self.print_job = Some(job);
     }
 
@@ -519,11 +522,9 @@ impl App {
         if self.print_job.is_some() {
             return;
         }
-        self.print_job = Some(PrintJob::new(
-            filename,
-            media,
-            Stage::LoadingDetails { since: Instant::now() },
-        ));
+        let mut job = PrintJob::new(filename, media, Stage::LoadingDetails { since: Instant::now() });
+        job.smooth_plate = self.settings.smooth_plate;
+        self.print_job = Some(job);
         self.request_job_details();
     }
 
@@ -546,6 +547,14 @@ impl App {
             return;
         }
         let params = job.start_params();
+        let (smooth, refill, printer_refill) =
+            (job.smooth_plate, job.auto_refill, job.printer_auto_refill);
+        self.settings.smooth_plate = smooth;
+        // Auto refill is a Canvas setting, not part of the start command;
+        // commands are handled in order, so it applies before the print starts.
+        if refill != printer_refill {
+            self.send(2004, json!({"enable": refill}));
+        }
         if self.send(1020, params).is_some() {
             if let Some(job) = &mut self.print_job {
                 job.error = None;

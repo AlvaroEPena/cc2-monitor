@@ -13,6 +13,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context) {
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.add(egui::Image::new((app.logo.id(), egui::Vec2::splat(24.0))));
                 ui.label(RichText::new("CC2 Monitor").size(18.0).strong());
                 ui.separator();
 

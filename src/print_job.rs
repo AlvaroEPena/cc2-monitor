@@ -75,6 +75,12 @@ pub struct PrintJob {
     pub mapping: Vec<Option<usize>>,
     pub level_bed: bool,
     pub timelapse: bool,
+    /// Plate side: false = textured high-temp (A), true = smooth low-temp (B).
+    pub smooth_plate: bool,
+    /// Canvas auto refill as the user wants it for this print.
+    pub auto_refill: bool,
+    /// Canvas auto refill as the printer last reported it.
+    pub printer_auto_refill: bool,
     pub thumb: Option<TextureHandle>,
     pub error: Option<String>,
 }
@@ -92,6 +98,9 @@ impl PrintJob {
             mapping: Vec::new(),
             level_bed: true,
             timelapse: false,
+            smooth_plate: false,
+            auto_refill: false,
+            printer_auto_refill: false,
             thumb: None,
             error: None,
         }
@@ -102,6 +111,11 @@ impl PrintJob {
         self.tools = tools_from_detail(&detail);
         self.trays = trays_from_canvas(canvas);
         self.mapping = auto_map(&self.tools, &self.trays);
+        self.printer_auto_refill = canvas
+            .get("auto_refill")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        self.auto_refill = self.printer_auto_refill;
         self.detail = detail;
         self.stage = Stage::Ready;
     }
@@ -130,7 +144,8 @@ impl PrintJob {
             "config": {
                 "delay_video": self.timelapse,
                 "printer_check": self.level_bed,
-                "print_layout": "A",
+                // As elegoo-link sends it: "A" textured plate, "B" smooth plate.
+                "print_layout": if self.smooth_plate { "B" } else { "A" },
                 "bedlevel_force": false,
                 "slot_map": slot_map,
             }
@@ -273,6 +288,18 @@ mod tests {
         assert_eq!(map.len(), 1);
         assert_eq!(map[0]["t"], 0);
         assert!(map[0].get("canvas_id").is_some() && map[0].get("tray_id").is_some());
+    }
+
+    #[test]
+    fn plate_side_and_auto_refill() {
+        let mut c = canvas();
+        c["auto_refill"] = json!(true);
+        let mut job = PrintJob::new("a.gcode".into(), "local", Stage::Ready);
+        job.set_detail(json!({"color_map": []}), &c);
+        assert!(job.auto_refill && job.printer_auto_refill);
+        assert_eq!(job.start_params()["config"]["print_layout"], "A");
+        job.smooth_plate = true;
+        assert_eq!(job.start_params()["config"]["print_layout"], "B");
     }
 
     #[test]
