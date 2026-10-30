@@ -377,7 +377,8 @@ fn motion(app: &mut App, ui: &mut egui::Ui) {
                 ui.add_space(6.0);
             }
         });
-        if !homed.contains('x') || !homed.contains('y') || !homed.contains('z') {
+        let all_homed = homed.contains('x') && homed.contains('y') && homed.contains('z');
+        if app.state.has_status() && !all_homed {
             ui.label(RichText::new("Not all axes homed").small().color(theme::WARN));
         }
 
@@ -406,7 +407,7 @@ fn motion(app: &mut App, ui: &mut egui::Ui) {
                 if btn(ui, "X−") {
                     jog = Some(("x", -step));
                 }
-                if btn(ui, "⌂") {
+                if btn(ui, "Home") {
                     home = true;
                 }
                 if btn(ui, "X+") {

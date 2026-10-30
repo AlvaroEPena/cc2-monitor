@@ -191,7 +191,11 @@ fn job_card(app: &mut App, ui: &mut egui::Ui) {
                 ui.add(
                     egui::ProgressBar::new((progress / 100.0) as f32)
                         .text(RichText::new(format!("{progress:.0}%")).strong())
-                        .fill(if paused { theme::WARN } else { theme::ACCENT })
+                        .fill(match (printing, paused) {
+                            (false, _) => egui::Color32::TRANSPARENT,
+                            (true, true) => theme::WARN,
+                            (true, false) => theme::ACCENT,
+                        })
                         .desired_height(18.0),
                 );
                 ui.add_space(4.0);
